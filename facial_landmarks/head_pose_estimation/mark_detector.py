@@ -2,8 +2,8 @@ import cv2
 
 class FaceDetector:
     def __init__(self,
-                 dnn_proto_text='head_pose_estimation/assets/deploy.prototxt',
-                 dnn_model='head_pose_estimation/assets/res10_300x300_ssd_iter_140000.caffemodel'):
+                 dnn_proto_text='facial_landmarks/head_pose_estimation/assets/deploy.prototxt',
+                 dnn_model='facial_landmarks/head_pose_estimation/assets/res10_300x300_ssd_iter_140000.caffemodel'):
         """Initialization"""
         self.face_net = cv2.dnn.readNetFromCaffe(dnn_proto_text, dnn_model)
         self.detection_result = None

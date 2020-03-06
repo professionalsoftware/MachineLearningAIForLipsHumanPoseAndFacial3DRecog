@@ -40,7 +40,7 @@ def main():
     # Setup face detection models
     if args.cpu:  # use dlib to do face detection and facial landmark detection
         import dlib
-        dlib_model_path = 'head_pose_estimation/assets/shape_predictor_68_face_landmarks.dat'
+        dlib_model_path = 'facial_landmarks/head_pose_estimation/assets/shape_predictor_68_face_landmarks.dat'
         shape_predictor = dlib.shape_predictor(dlib_model_path)
         face_detector = dlib.get_frontal_face_detector()
     else:  # use better models on GPU

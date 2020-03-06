@@ -13,99 +13,70 @@ from facial_landmarks.head_pose_estimation.stabilizer import Stabilizer
 from facial_landmarks.head_pose_estimation.visualization import *
 from facial_landmarks.head_pose_estimation.misc import *
 
-from facial_landmarks.input_reader import VideoReader, ImageReader, VideoReaderFromIntelRealsenseCAM
 
 
-def get_face(detector, image, cpu=False):
-    if cpu:
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        try:
-            box = detector(image)[0]
-            x1 = box.left()
-            y1 = box.top()
-            x2 = box.right()
-            y2 = box.bottom()
-            return [x1, y1, x2, y2]
-        except:
-            return None
-    else:
-        image = cv2.resize(image, None, fx=0.5, fy=0.5)
-        box = detector.detect_from_image(image)[0]
-        if box is None:
-            return None
-        return (2 * box[:4]).astype(int)
+class FacialLandmarksEngine:
+    def __init__(self, frame_width=640, frame_height=480, CAM_FPS=30, args_cpu=False, args_debug=False):
+        self.args_cpu = args_cpu
+        self.args_debug = args_debug
+
+        if self.args_cpu:  # use dlib to do face detection and facial landmark detection
+            import dlib
+            dlib_model_path = 'head_pose_estimation/assets/shape_predictor_68_face_landmarks.dat'
+            self.shape_predictor = dlib.shape_predictor(dlib_model_path)
+            self.face_detector = dlib.get_frontal_face_detector()
+        else:  # use better models on GPU
+            import face_alignment  # the local directory in this repo
+            try:
+                import onnxruntime
+                use_onnx = True
+            except:
+                use_onnx = False
+            self.fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._2D, use_onnx=use_onnx,
+                                              flip_input=False)
+            self.face_detector = self.fa.face_detector
+
+        self.frame_width = frame_width
+        self.frame_height = frame_height
+        self.CAM_FPS = CAM_FPS
+
+        self.ts = []
+        self.frame_count = 0
+        self.no_face_count = 0
+        self.prev_boxes = deque(maxlen=5)
+        self.prev_marks = deque(maxlen=5)
+
+        self.sample_frame = None
+
+    def get_face(self, detector, image, cpu=False):
+        if cpu:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            try:
+                box = detector(image)[0]
+                x1 = box.left()
+                y1 = box.top()
+                x2 = box.right()
+                y2 = box.bottom()
+                return [x1, y1, x2, y2]
+            except:
+                return None
+        else:
+            image = cv2.resize(image, None, fx=0.5, fy=0.5)
+            box = detector.detect_from_image(image)[0]
+            if box is None:
+                return None
+            return (2 * box[:4]).astype(int)
+
+    def release_resources(self):
+        # Clean up the process.
+        self.frame_provider.release()
+        if self.args_debug:
+            cv2.destroyAllWindows()
+        print('%.3f' % np.mean(self.ts))
 
 
-def main():
-    # Setup face detection models
-    if args.cpu:  # use dlib to do face detection and facial landmark detection
-        import dlib
-        dlib_model_path = 'head_pose_estimation/assets/shape_predictor_68_face_landmarks.dat'
-        shape_predictor = dlib.shape_predictor(dlib_model_path)
-        face_detector = dlib.get_frontal_face_detector()
-    else:  # use better models on GPU
-        import face_alignment  # the local directory in this repo
-        try:
-            import onnxruntime
-            use_onnx = True
-        except:
-            use_onnx = False
-        fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._2D, use_onnx=use_onnx,
-                                          flip_input=False)
-        face_detector = fa.face_detector
-
-    # added for intelrealsensecamera
-    try:
-        # Camera info
-        config = configparser.ConfigParser()
-        config.read('setting.ini')
-        frame_width = int(config['CAMERA']['Width'])
-        frame_height = int(config['CAMERA']['Height'])
-        CAM_FPS = int(config['CAMERA']['FPS'])
-        # TCP/IP Socket info
-        TCP_IP = config['SOCKET']['TCP_IP']
-        TCP_PORT = int(config['SOCKET']['TCP_PORT'])
-    except:
-        # Camera info
-        frame_width = 640
-        frame_height = 480
-        CAM_FPS = 30
-        # TCP/IP Socket info
-        # TCP_IP = '10.10.10.14'
-        TCP_IP = '127.0.0.1'
-        TCP_PORT = 5005
-
-    if args.use_intelrealsensecamera:
-        frame_provider = VideoReaderFromIntelRealsenseCAM(frame_width, frame_height, CAM_FPS)
-    else:
-        os_name = system()
-        if os_name in ['Windows']:  # CAP_DSHOW is required on my windows PC to get 30 FPS
-            frame_provider = VideoReader(args.cam + cv2.CAP_DSHOW)
-            # cap = cv2.VideoCapture(args.cam+cv2.CAP_DSHOW)
-        else:  # linux PC is as usual
-            frame_provider = VideoReader(args.cam)
-
-    # Establish a TCP connection to unity.
-    if args.connect:
-        address = ('127.0.0.1', 5005)
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(address)
-
-    ts = []
-    frame_count = 0
-    no_face_count = 0
-    prev_boxes = deque(maxlen=5)
-    prev_marks = deque(maxlen=5)
-
-    sample_frame = None
-    # while True:
-    for frame in frame_provider:
-        # check if ratation to vertical
-        if args.rotation_to_vertical:
-            # frame = np.rot90(frame, k=-1, axes=(0, 1))
-            frame = imutils.rotate_bound(frame, 90)
-
-        if frame_count == 0:
+    def process_frame(self, frame):
+        if self.frame_count == 0:
             sample_frame = frame
             # Introduce pose estimator to solve pose. Get one frame to setup the
             # estimator according to the image size.
@@ -121,14 +92,7 @@ def main():
 
         # _, frame = cap.read()
         # frame = cv2.flip(frame, 2)
-        frame_count += 1
-        if args.connect and frame_count > 60:  # send information to unity
-            try:
-                msg = '%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f' % \
-                      (roll, pitch, yaw, min_ear, mar, mdst, steady_pose[6], steady_pose[7])
-                s.send(bytes(msg, "utf-8"))
-            except:
-                pass
+        self.frame_count += 1
 
         t = time.time()
 
@@ -137,38 +101,38 @@ def main():
         # 2. detect landmarks;
         # 3. estimate pose
 
-        if frame_count % 2 == 1:  # do face detection every odd frame
-            facebox = get_face(face_detector, frame, args.cpu)
+        if self.frame_count % 2 == 1:  # do face detection every odd frame
+            facebox = self.get_face(self.face_detector, frame, self.args_cpu)
             if facebox is not None:
                 no_face_count = 0
-        elif len(prev_boxes) > 1:  # use a linear movement assumption
-            if no_face_count > 1:  # don't estimate more than 1 frame
+        elif len(self.prev_boxes) > 1:  # use a linear movement assumption
+            if self.no_face_count > 1:  # don't estimate more than 1 frame
                 facebox = None
             else:
-                facebox = prev_boxes[-1] + np.mean(np.diff(np.array(prev_boxes), axis=0), axis=0)[0]
+                facebox = self.prev_boxes[-1] + np.mean(np.diff(np.array(self.prev_boxes), axis=0), axis=0)[0]
                 facebox = facebox.astype(int)
-                no_face_count += 1
+                self.no_face_count += 1
 
         if facebox is not None:  # if face is detected
-            prev_boxes.append(facebox)
+            self.prev_boxes.append(facebox)
             # Do facial landmark detection and iris detection.
-            if args.cpu:  # do detection every frame
+            if self.args_cpu:  # do detection every frame
                 face = dlib.rectangle(left=facebox[0], top=facebox[1],
                                       right=facebox[2], bottom=facebox[3])
-                marks = shape_to_np(shape_predictor(frame, face))
+                marks = shape_to_np(self.shape_predictor(frame, face))
             else:
-                if frame_count == 1 or frame_count % 2 == 0 or len(
-                        prev_marks) < 1:  # do landmark detection on first frame
+                if self.frame_count == 1 or self.frame_count % 2 == 0 or len(
+                        self.prev_marks) < 1:  # do landmark detection on first frame
                     # or every even frame
                     face_img = frame[facebox[1]: facebox[3], facebox[0]: facebox[2]]
-                    marks = fa.get_landmarks(face_img[:, :, ::-1],
+                    marks = self.fa.get_landmarks(face_img[:, :, ::-1],
                                              detected_faces=[(0, 0, facebox[2] - facebox[0], facebox[3] - facebox[1])])
                     marks = marks[-1]
                     marks[:, 0] += facebox[0]
                     marks[:, 1] += facebox[1]
-                elif len(prev_marks) > 1:  # use a linear movement assumption
-                    marks = prev_marks[-1] + np.mean(np.diff(np.array(prev_marks), axis=0), axis=0)
-                prev_marks.append(marks)
+                elif len(self.prev_marks) > 1:  # use a linear movement assumption
+                    marks = self.prev_marks[-1] + np.mean(np.diff(np.array(self.prev_marks), axis=0), axis=0)
+                self.prev_marks.append(marks)
 
             x_l, y_l, ll, lu = detect_iris(frame, marks, "left")
             x_r, y_r, rl, ru = detect_iris(frame, marks, "right")
@@ -198,11 +162,31 @@ def main():
                 min_ear = min(eye_aspect_ratio(marks[36:42]), eye_aspect_ratio(marks[42:48]))
                 mar = mouth_aspect_ration(marks[60:68])
                 mdst = mouth_distance(marks[60:68]) / (facebox[2] - facebox[0])
+
+                if self.args_debug:
+                    msg = '%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f' % \
+                          (roll, pitch, yaw, min_ear, mar, mdst, steady_pose[6], steady_pose[7])
+                    print(msg)
+
             except:
                 pass
 
-            if args.debug:  # draw landmarks, etc.
+            # if args.connect and self.frame_count > 60:  # send information to unity
+            #     try:
+            #         msg = '%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f' % \
+            #               (roll, pitch, yaw, min_ear, mar, mdst, steady_pose[6], steady_pose[7])
+            #         s.send(bytes(msg, "utf-8"))
+            #     except:
+            #         pass
+            # if self.frame_count > 60 & self.args_debug:
+            #     try:
+            #         msg = '%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f' % \
+            #               (roll, pitch, yaw, min_ear, mar, mdst, steady_pose[6], steady_pose[7])
+            #         print(msg)
+            #     except:
+            #         pass
 
+            if self.args_debug:  # draw landmarks, etc.
                 # show iris.
                 if x_l > 0 and y_l > 0:
                     draw_iris(frame, x_l, y_l)
@@ -225,46 +209,14 @@ def main():
                     pose_estimator.draw_axes(frame, np.expand_dims(steady_pose[:3], 0),
                                              np.expand_dims(steady_pose[3:6], 0))
 
-        dt = time.time() - t
-        ts += [dt]
-        FPS = int(1 / (np.mean(ts[-10:]) + 1e-6))
-        print('\r', '%.3f' % dt, end=' ')
+            dt = time.time() - t
+            self.ts += [dt]
+            FPS = int(1 / (np.mean(self.ts[-10:]) + 1e-6))
+            print('\r', '%.3f' % dt, end=' ')
 
-        if args.debug:
-            draw_FPS(frame, FPS)
-            cv2.imshow("face", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):  # press q to exit.
-                break
+            if self.args_debug:
+                draw_FPS(frame, FPS)
+                cv2.imshow("face", frame)
+                # if cv2.waitKey(1) & 0xFF == ord('q'):  # press q to exit.
+                #     break
 
-    # Clean up the process.
-    frame_provider.release()
-    if args.connect:
-        s.close()
-    if args.debug:
-        cv2.destroyAllWindows()
-    print('%.3f' % np.mean(ts))
-
-
-if __name__ == '__main__':
-    parser = ArgumentParser()
-    parser.add_argument("--cam", type=int,
-                        help="specify the camera number if you have multiple cameras",
-                        default=0)
-    parser.add_argument("--cpu", action="store_true",
-                        help="use cpu to do face detection and facial landmark detection",
-                        default=False)
-    parser.add_argument("--debug", action="store_true",
-                        help="show camera image to debug (need to uncomment to show results)",
-                        default=False)
-    parser.add_argument("--connect", action="store_true",
-                        help="connect to unity character",
-                        default=False)
-    parser.add_argument('--use-intelrealsensecamera',
-                        help='Optional. Use intel realsense camera.',
-                        action='store_true')
-    parser.add_argument('--rotation-to-vertical',
-                        help='Optional. rotate camera from horizontal to vertical',
-                        action='store_true')
-
-    args = parser.parse_args()
-    main()

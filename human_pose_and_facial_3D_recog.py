@@ -4,13 +4,14 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 from OpenGL.GLUT import *
 
+from argparse import ArgumentParser
 import lipsbodypose
 import cv2
 import numpy
 import math
 import sys
 
-from facial_landmarks import *
+from facial_landmarks import FacialLandmarksEngine
 
 class PoseRenderConstants:
     PartIdx = {
@@ -96,6 +97,8 @@ tex_inited = False
 
 pose = lipsbodypose.lipsbodypose()
 
+facialLandmarksEngineObj = None
+
 # timer ############################################################################
 def timer(value):
     global win3d
@@ -115,6 +118,9 @@ def timer(value):
     # 2D #=====================================================
     glutSetWindow(win2d)
     glutPostRedisplay()
+
+    # Process frame for facial landmarks recognition
+    facialLandmarksEngineObj.process_frame(rgb)
 
     glutTimerFunc(0, timer, 0)
 
@@ -509,9 +515,32 @@ def init_opengl():
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR )
 
 
-# main #############################################################################
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument("--cpu", action="store_true",
+                        help="use cpu to do face detection and facial landmark detection",
+                        default=False)
+    parser.add_argument("--debug", action="store_true",
+                        help="show camera image to debug (need to uncomment to show results)",
+                        default=False)
+    parser.add_argument("--connect", action="store_true",
+                        help="connect to unity character",
+                        default=False)
+    parser.add_argument('--rotation-to-vertical',
+                        help='Optional. rotate camera from horizontal to vertical',
+                        action='store_true')
 
+    args = parser.parse_args()
+    return args
+
+
+def initFacialLandmarksEngine(args):
+    global facialLandmarksEngineObj
+    facialLandmarksEngineObj = FacialLandmarksEngine(args_cpu=args.cpu, args_debug=args.debug)
+
+# main #############################################################################
 def main():
+    args = parse_args()
 
     init_glut()
 
@@ -521,7 +550,10 @@ def main():
 
     glutIdleFunc(Idle)
 
+    initFacialLandmarksEngine(args)
+
     return glutMainLoop()
 
 if __name__ == '__main__':
     sys.exit(main())
+

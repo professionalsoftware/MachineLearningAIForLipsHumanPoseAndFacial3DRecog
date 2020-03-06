@@ -6,10 +6,10 @@ import socket
 from collections import deque
 from platform import system
 
-from head_pose_estimation.pose_estimator import PoseEstimator
-from head_pose_estimation.stabilizer import Stabilizer
-from head_pose_estimation.visualization import *
-from head_pose_estimation.misc import *
+from facial_landmarks.head_pose_estimation.pose_estimator import PoseEstimator
+from facial_landmarks.head_pose_estimation.stabilizer import Stabilizer
+from facial_landmarks.head_pose_estimation.visualization import *
+from facial_landmarks.head_pose_estimation.misc import *
 
 
 def get_face(detector, image, cpu=False):

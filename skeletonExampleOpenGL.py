@@ -10,6 +10,8 @@ import numpy
 import math
 import sys
 
+from facial_landmarks import *
+
 class PoseRenderConstants:
     PartIdx = {
         'NOSE': 0,
